@@ -1,9 +1,7 @@
-import {
-  FORMAT_MS_GSM610,
-  FORMAT_PCM,
-  RIFF_FOURCC,
-  WAVE_FOURCC
-} from "./constants.js";
+const RIFF_FOURCC = "RIFF";
+const WAVE_FOURCC = "WAVE";
+const FORMAT_PCM = 0x0001;
+const FORMAT_MS_GSM610 = 0x0031;
 
 function readFourCc(view, offset) {
   if (offset + 4 > view.byteLength) {

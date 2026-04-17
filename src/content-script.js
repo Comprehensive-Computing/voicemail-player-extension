@@ -4,8 +4,8 @@ const decodedCache = new Map();
 const extensionApi = globalThis.browser ?? globalThis.chrome;
 const lastProcessedUrlByElement = new WeakMap();
 const bridgedObjectUrls = new WeakMap();
-let activePlayerOverlay = null;
 const attachmentLoadingState = new WeakMap();
+const attachmentPlayerState = new WeakMap();
 
 bootstrap();
 
@@ -139,14 +139,26 @@ async function transcodeAttachmentLink(link) {
 
   try {
     const buffer = await fetchAttachmentBuffer(originalUrl);
-    const playerId = crypto.randomUUID();
-    await storeAttachmentForPlayer(playerId, buffer, deriveAttachmentFilename(link));
-    const playerUrl = extensionApi.runtime.getURL(`src/player.html?id=${encodeURIComponent(playerId)}`);
-    revokeExistingObjectUrl(link);
-    link.href = playerUrl;
+    const response = await sendRuntimeMessage({
+      type: "START_ATTACHMENT_TRANSCODE",
+      url: originalUrl,
+      filename: deriveAttachmentFilename(link),
+      buffer: Array.from(new Uint8Array(buffer))
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error ?? "Attachment transcode failed.");
+    }
+
+    if (response.result?.kind !== "cached" || !response.result.cacheId) {
+      openAttachmentTarget(link, originalUrl);
+      return;
+    }
+
+    link.href = originalUrl;
     link.dataset.msGsmOriginalHref = originalUrl;
-    link.dataset.msGsmPlayerUrl = playerUrl;
-    openPlayerWindow(playerUrl);
+    link.dataset.msGsmCacheId = response.result.cacheId;
+    await openInlinePlayerForLink(link);
   } catch (error) {
     console.warn("MS GSM WAV Support failed to transcode Gmail attachment link", error);
     openAttachmentTarget(link, originalUrl);
@@ -196,30 +208,118 @@ function deriveAttachmentFilename(link) {
   return "attachment.wav";
 }
 
-function reopenUpgradedAttachmentLink(link) {
-  const playerUrl = link.dataset.msGsmPlayerUrl || link.href;
-  openPlayerWindow(playerUrl);
+async function reopenUpgradedAttachmentLink(link) {
+  try {
+    await openInlinePlayerForLink(link);
+  } catch (error) {
+    console.warn("MS GSM WAV Support failed to reopen inline player", error);
+    openAttachmentTarget(link, link.dataset.msGsmOriginalHref || link.href);
+  }
 }
 
-async function storeAttachmentForPlayer(id, buffer, filename) {
-  const key = getAttachmentStorageKey(id);
-  const value = { filename, buffer: Array.from(new Uint8Array(buffer)), createdAt: Date.now() };
-  if (extensionApi.storage.local.set.length <= 1) return extensionApi.storage.local.set({ [key]: value });
-  return new Promise((resolve, reject) => {
-    extensionApi.storage.local.set({ [key]: value }, () => {
-      const lastError = globalThis.chrome?.runtime?.lastError;
-      if (lastError) return reject(new Error(lastError.message));
-      resolve();
-    });
+async function openInlinePlayerForLink(link) {
+  const playerData = await ensureAttachmentPlayerData(link);
+  showInlinePlayer(link, playerData);
+}
+
+async function ensureAttachmentPlayerData(link) {
+  const existing = attachmentPlayerState.get(link);
+  if (existing?.objectUrl) {
+    return existing;
+  }
+
+  const cacheId = link.dataset.msGsmCacheId;
+  if (!cacheId) {
+    throw new Error("Missing cached playable id.");
+  }
+
+  const response = await sendRuntimeMessage({
+    type: "GET_CACHED_PLAYABLE",
+    cacheId
   });
+
+  if (!response?.ok || !response.result || !Array.isArray(response.result.buffer)) {
+    throw new Error(response?.error ?? "Invalid cached playable payload.");
+  }
+
+  const bytes = new Uint8Array(response.result.buffer);
+  const mimeType = response.result.mimeType || "audio/wav";
+  const filename = response.result.filename || deriveAttachmentFilename(link);
+  const objectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+  const state = { cacheId, objectUrl, mimeType, filename };
+  attachmentPlayerState.set(link, state);
+
+  void sendRuntimeMessage({
+    type: "RELEASE_CACHED_PLAYABLE",
+    cacheId
+  }).catch(() => undefined);
+
+  return state;
 }
 
-function openPlayerWindow(url) {
-  const width = 460;
-  const height = 220;
-  const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
-  const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
-  window.open(url, "ms-gsm-player", `popup=yes,width=${width},height=${height},left=${left},top=${top}`);
+function showInlinePlayer(link, playerData) {
+  dismissInlinePlayer();
+  ensureInlinePlayerStyles();
+
+  const overlay = document.createElement("div");
+  overlay.id = "ms-gsm-inline-player-overlay";
+  overlay.tabIndex = -1;
+
+  const card = document.createElement("div");
+  card.id = "ms-gsm-inline-player-card";
+
+  const title = document.createElement("div");
+  title.id = "ms-gsm-inline-player-title";
+  title.textContent = playerData.filename;
+
+  const audio = document.createElement("audio");
+  audio.controls = true;
+  audio.autoplay = true;
+  audio.src = playerData.objectUrl;
+  audio.style.width = "100%";
+
+  const actions = document.createElement("div");
+  actions.id = "ms-gsm-inline-player-actions";
+
+  const download = document.createElement("a");
+  download.href = playerData.objectUrl;
+  download.download = playerData.filename;
+  download.textContent = "Download";
+  download.className = "ms-gsm-inline-player-button";
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Close";
+  close.className = "ms-gsm-inline-player-button ms-gsm-inline-player-button-secondary";
+  close.addEventListener("click", () => dismissInlinePlayer());
+
+  actions.append(download, close);
+  card.append(title, audio, actions);
+  overlay.append(card);
+  document.documentElement.append(overlay);
+
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      dismissInlinePlayer();
+    }
+  });
+
+  document.addEventListener("keydown", handleInlinePlayerEscape);
+  overlay.focus();
+}
+
+function dismissInlinePlayer() {
+  const overlay = document.getElementById("ms-gsm-inline-player-overlay");
+  if (overlay) {
+    overlay.remove();
+  }
+  document.removeEventListener("keydown", handleInlinePlayerEscape);
+}
+
+function handleInlinePlayerEscape(event) {
+  if (event.key === "Escape") {
+    dismissInlinePlayer();
+  }
 }
 
 function installMediaRecovery() {
@@ -480,7 +580,7 @@ function isGmailWavAttachmentLink(link) {
 }
 
 function isUpgradedAttachmentLink(link) {
-  return Boolean(link.dataset.msGsmOriginalHref && link.dataset.msGsmPlayerUrl);
+  return Boolean(link.dataset.msGsmOriginalHref && link.dataset.msGsmCacheId);
 }
 
 function setAttachmentLoadingState(link, label) {
@@ -558,6 +658,69 @@ function ensureLoadingStyles() {
   document.documentElement.append(style);
 }
 
+function ensureInlinePlayerStyles() {
+  if (document.getElementById("ms-gsm-inline-player-style")) {
+    return;
+  }
+
+  const style = document.createElement("style");
+  style.id = "ms-gsm-inline-player-style";
+  style.textContent = `
+    #ms-gsm-inline-player-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(32, 33, 36, 0.56);
+      z-index: 2147483647;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    #ms-gsm-inline-player-card {
+      width: min(480px, calc(100vw - 48px));
+      border-radius: 16px;
+      background: #fff;
+      color: #202124;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      font-family: Google Sans, Arial, sans-serif;
+    }
+
+    #ms-gsm-inline-player-title {
+      font-size: 14px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    #ms-gsm-inline-player-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .ms-gsm-inline-player-button {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: #1a73e8;
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      text-decoration: none;
+    }
+
+    .ms-gsm-inline-player-button-secondary {
+      background: #e8eaed;
+      color: #202124;
+    }
+  `;
+  document.documentElement.append(style);
+}
+
 function sameUrl(left, right) {
   try {
     return normalizeUrl(left) === normalizeUrl(right);
@@ -572,10 +735,6 @@ function safeReadCurrentTime(media) {
   } catch {
     return 0;
   }
-}
-
-function getAttachmentStorageKey(id) {
-  return `attachment:${id}`;
 }
 
 function sendRuntimeMessage(message) {

@@ -5,7 +5,8 @@
   "description": "Decodes MS GSM 6.10 WAV files inside the extension and replaces them with PCM WAV audio the browser can play.",
   "permissions": [
     "scripting",
-    "storage"
+    "storage",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -33,6 +34,8 @@
     {
       "resources": [
         "src/page-proxy.js",
+        "src/offscreen.html",
+        "src/offscreen.js",
         "src/player.html",
         "src/player.js",
         "src/vendor/ffmpeg/index.js",
