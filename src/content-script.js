@@ -277,6 +277,7 @@ function showInlinePlayer(link, playerData) {
   audio.autoplay = true;
   audio.src = playerData.objectUrl;
   audio.style.width = "100%";
+  audio.style.display = "block";
 
   const actions = document.createElement("div");
   actions.id = "ms-gsm-inline-player-actions";
@@ -684,22 +685,46 @@ function ensureInlinePlayerStyles() {
       background: #fff;
       color: #202124;
       box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
-      padding: 18px;
-      display: grid;
-      gap: 14px;
+      padding: 12px 14px 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      height: auto;
+      min-height: 0;
       font-family: Google Sans, Arial, sans-serif;
     }
 
+    @media (max-width: 640px) {
+      #ms-gsm-inline-player-overlay {
+        padding: 16px;
+      }
+
+      #ms-gsm-inline-player-card {
+        width: 100%;
+      }
+    }
+
     #ms-gsm-inline-player-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
       overflow-wrap: anywhere;
+      line-height: 1.3;
+      margin: 0;
     }
 
     #ms-gsm-inline-player-actions {
       display: flex;
       justify-content: flex-end;
       gap: 10px;
+    }
+
+    #ms-gsm-inline-player-card audio {
+      display: block;
+      margin: 0;
+      flex: none;
+      min-height: 0;
+      max-height: 54px;
     }
 
     .ms-gsm-inline-player-button {
