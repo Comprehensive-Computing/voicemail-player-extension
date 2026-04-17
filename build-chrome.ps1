@@ -9,6 +9,7 @@ if (Test-Path $target) {
 }
 
 New-Item -ItemType Directory -Path $target | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $target "img") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $target "src") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $target "src\\shared") | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $target "src\\vendor") | Out-Null
@@ -17,7 +18,10 @@ New-Item -ItemType Directory -Path (Join-Path $target "src\\vendor\\ffmpeg-core"
 
 Copy-Item -LiteralPath (Join-Path $root "manifest.chrome.json") -Destination (Join-Path $target "manifest.json")
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination (Join-Path $target "LICENSE")
-Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination (Join-Path $target "README.md")
+Copy-Item -LiteralPath (Join-Path $root "img\\Voicemail-Player-Extension-Icon-32x32.png") -Destination (Join-Path $target "img\\Voicemail-Player-Extension-Icon-32x32.png")
+Copy-Item -LiteralPath (Join-Path $root "img\\Voicemail-Player-Extension-Icon-64x64.png") -Destination (Join-Path $target "img\\Voicemail-Player-Extension-Icon-64x64.png")
+Copy-Item -LiteralPath (Join-Path $root "img\\Voicemail-Player-Extension-Icon-128x128.png") -Destination (Join-Path $target "img\\Voicemail-Player-Extension-Icon-128x128.png")
+Copy-Item -LiteralPath (Join-Path $root "img\\Voicemail-Player-Extension-Icon-256x256.png") -Destination (Join-Path $target "img\\Voicemail-Player-Extension-Icon-256x256.png")
 Copy-Item -LiteralPath (Join-Path $root "src\\background.js") -Destination (Join-Path $target "src\\background.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\browser-api.js") -Destination (Join-Path $target "src\\browser-api.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\content-script.js") -Destination (Join-Path $target "src\\content-script.js")
