@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "MS GSM WAV Support",
+  "version": "0.1.0",
+  "description": "Decodes MS GSM 6.10 WAV files inside the extension and replaces them with PCM WAV audio the browser can play.",
+  "permissions": [
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "src/background.js"
+    ],
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self' blob:"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://drive.google.com/*"
+      ],
+      "js": [
+        "src/content-script.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/page-proxy.js",
+        "src/vendor/ffmpeg/index.js",
+        "src/vendor/ffmpeg/classes.js",
+        "src/vendor/ffmpeg/const.js",
+        "src/vendor/ffmpeg/errors.js",
+        "src/vendor/ffmpeg/types.js",
+        "src/vendor/ffmpeg/utils.js",
+        "src/vendor/ffmpeg/worker.js",
+        "src/vendor/ffmpeg-core/ffmpeg-core.js",
+        "src/vendor/ffmpeg-core/ffmpeg-core.wasm"
+      ],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://drive.google.com/*"
+      ]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ms-gsm-wav-support@example.local",
+      "strict_min_version": "128.0"
+    }
+  }
+}
