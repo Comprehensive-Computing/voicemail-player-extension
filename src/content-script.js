@@ -68,10 +68,11 @@ async function getPlayableResult(url, buffer = null) {
     return decodedCache.get(normalizedUrl);
   }
 
+  const normalizedBuffer = buffer !== null ? Array.from(new Uint8Array(buffer)) : null;
   const response = await sendRuntimeMessage({
-    type: buffer !== null ? "GOOGLE_AUDIO_PROBE_BUFFER" : "GOOGLE_AUDIO_PROBE",
+    type: normalizedBuffer !== null ? "GOOGLE_AUDIO_PROBE_BUFFER" : "GOOGLE_AUDIO_PROBE",
     url: normalizedUrl,
-    buffer
+    buffer: normalizedBuffer
   });
 
   if (!response?.ok) {
@@ -138,19 +139,14 @@ async function transcodeAttachmentLink(link) {
 
   try {
     const buffer = await fetchAttachmentBuffer(originalUrl);
-    const result = await getPlayableResult(originalUrl, buffer);
-
-    if (result?.kind !== "decoded") {
-      openAttachmentTarget(link, originalUrl);
-      return;
-    }
-
+    const playerId = crypto.randomUUID();
+    await storeAttachmentForPlayer(playerId, buffer, deriveAttachmentFilename(link));
+    const playerUrl = extensionApi.runtime.getURL(`src/player.html?id=${encodeURIComponent(playerId)}`);
     revokeExistingObjectUrl(link);
-    link.href = result.objectUrl;
+    link.href = playerUrl;
     link.dataset.msGsmOriginalHref = originalUrl;
-    link.dataset.msGsmObjectUrl = result.objectUrl;
-    bridgedObjectUrls.set(link, result.objectUrl);
-    showPlayerPopup(result.objectUrl, deriveAttachmentFilename(link));
+    link.dataset.msGsmPlayerUrl = playerUrl;
+    openPlayerWindow(playerUrl);
   } catch (error) {
     console.warn("MS GSM WAV Support failed to transcode Gmail attachment link", error);
     openAttachmentTarget(link, originalUrl);
@@ -201,104 +197,29 @@ function deriveAttachmentFilename(link) {
 }
 
 function reopenUpgradedAttachmentLink(link) {
-  const objectUrl = link.dataset.msGsmObjectUrl || link.href;
-  showPlayerPopup(objectUrl, deriveAttachmentFilename(link));
+  const playerUrl = link.dataset.msGsmPlayerUrl || link.href;
+  openPlayerWindow(playerUrl);
 }
 
-function showPlayerPopup(objectUrl, filename) {
-  closePlayerPopup();
-
-  const overlay = document.createElement("div");
-  overlay.style.position = "fixed";
-  overlay.style.inset = "0";
-  overlay.style.background = "rgba(32, 33, 36, 0.55)";
-  overlay.style.zIndex = "2147483647";
-  overlay.style.display = "flex";
-  overlay.style.alignItems = "center";
-  overlay.style.justifyContent = "center";
-
-  const panel = document.createElement("div");
-  panel.style.width = "min(420px, calc(100vw - 24px))";
-  panel.style.background = "#fff";
-  panel.style.color = "#202124";
-  panel.style.borderRadius = "12px";
-  panel.style.boxShadow = "0 16px 40px rgba(0, 0, 0, 0.25)";
-  panel.style.padding = "16px";
-  panel.style.fontFamily = "Arial, sans-serif";
-
-  const title = document.createElement("div");
-  title.textContent = filename;
-  title.style.fontSize = "14px";
-  title.style.fontWeight = "600";
-  title.style.marginBottom = "12px";
-  title.style.wordBreak = "break-word";
-
-  const audio = document.createElement("audio");
-  audio.controls = true;
-  audio.autoplay = true;
-  audio.src = objectUrl;
-  audio.style.width = "100%";
-  audio.style.display = "block";
-
-  const actions = document.createElement("div");
-  actions.style.display = "flex";
-  actions.style.justifyContent = "flex-end";
-  actions.style.gap = "8px";
-  actions.style.marginTop = "12px";
-
-  const downloadButton = document.createElement("a");
-  downloadButton.href = objectUrl;
-  downloadButton.download = filename;
-  downloadButton.textContent = "Download";
-  styleButton(downloadButton);
-
-  const closeButton = document.createElement("button");
-  closeButton.type = "button";
-  closeButton.textContent = "Close";
-  styleButton(closeButton);
-  closeButton.addEventListener("click", () => closePlayerPopup());
-
-  actions.append(downloadButton, closeButton);
-  panel.append(title, audio, actions);
-  overlay.append(panel);
-
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) {
-      closePlayerPopup();
-    }
+async function storeAttachmentForPlayer(id, buffer, filename) {
+  const key = getAttachmentStorageKey(id);
+  const value = { filename, buffer: Array.from(new Uint8Array(buffer)), createdAt: Date.now() };
+  if (extensionApi.storage.local.set.length <= 1) return extensionApi.storage.local.set({ [key]: value });
+  return new Promise((resolve, reject) => {
+    extensionApi.storage.local.set({ [key]: value }, () => {
+      const lastError = globalThis.chrome?.runtime?.lastError;
+      if (lastError) return reject(new Error(lastError.message));
+      resolve();
+    });
   });
-
-  document.addEventListener("keydown", handlePlayerEscape, true);
-  document.body.append(overlay);
-  activePlayerOverlay = overlay;
 }
 
-function closePlayerPopup() {
-  if (!activePlayerOverlay) {
-    return;
-  }
-
-  activePlayerOverlay.remove();
-  activePlayerOverlay = null;
-  document.removeEventListener("keydown", handlePlayerEscape, true);
-}
-
-function handlePlayerEscape(event) {
-  if (event.key === "Escape") {
-    closePlayerPopup();
-  }
-}
-
-function styleButton(element) {
-  element.style.border = "1px solid #dadce0";
-  element.style.background = "#fff";
-  element.style.color = "#202124";
-  element.style.borderRadius = "8px";
-  element.style.padding = "8px 12px";
-  element.style.fontSize = "13px";
-  element.style.fontWeight = "500";
-  element.style.cursor = "pointer";
-  element.style.textDecoration = "none";
+function openPlayerWindow(url) {
+  const width = 460;
+  const height = 220;
+  const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+  const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+  window.open(url, "ms-gsm-player", `popup=yes,width=${width},height=${height},left=${left},top=${top}`);
 }
 
 function installMediaRecovery() {
@@ -559,7 +480,7 @@ function isGmailWavAttachmentLink(link) {
 }
 
 function isUpgradedAttachmentLink(link) {
-  return Boolean(link.dataset.msGsmOriginalHref && link.dataset.msGsmObjectUrl);
+  return Boolean(link.dataset.msGsmOriginalHref && link.dataset.msGsmPlayerUrl);
 }
 
 function setAttachmentLoadingState(link, label) {
@@ -651,6 +572,10 @@ function safeReadCurrentTime(media) {
   } catch {
     return 0;
   }
+}
+
+function getAttachmentStorageKey(id) {
+  return `attachment:${id}`;
 }
 
 function sendRuntimeMessage(message) {

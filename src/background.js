@@ -1,5 +1,6 @@
 import { extensionApi } from "./browser-api.js";
 import { isProbablyWav, parseWav } from "./shared/wav.js";
+import { FFmpeg } from "./vendor/ffmpeg/index.js";
 
 const decodeCache = new Map();
 let ffmpegInstancePromise = null;
@@ -140,8 +141,6 @@ async function getFfmpeg() {
 }
 
 async function loadFfmpeg() {
-  const ffmpegModuleUrl = extensionApi.runtime.getURL("src/vendor/ffmpeg/index.js");
-  const { FFmpeg } = await import(ffmpegModuleUrl);
   const ffmpeg = new FFmpeg();
 
   await ffmpeg.load({

@@ -22,6 +22,8 @@ Copy-Item -LiteralPath (Join-Path $root "src\\background.js") -Destination (Join
 Copy-Item -LiteralPath (Join-Path $root "src\\browser-api.js") -Destination (Join-Path $target "src\\browser-api.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\content-script.js") -Destination (Join-Path $target "src\\content-script.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\page-proxy.js") -Destination (Join-Path $target "src\\page-proxy.js")
+Copy-Item -LiteralPath (Join-Path $root "src\\player.html") -Destination (Join-Path $target "src\\player.html")
+Copy-Item -LiteralPath (Join-Path $root "src\\player.js") -Destination (Join-Path $target "src\\player.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\shared\\constants.js") -Destination (Join-Path $target "src\\shared\\constants.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\shared\\gsm-decoder.js") -Destination (Join-Path $target "src\\shared\\gsm-decoder.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\shared\\ms-gsm.js") -Destination (Join-Path $target "src\\shared\\ms-gsm.js")

@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Decodes MS GSM 6.10 WAV files inside the extension and replaces them with PCM WAV audio the browser can play.",
   "permissions": [
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -14,7 +15,7 @@
     "type": "module"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self' blob:"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
   },
   "content_scripts": [
     {
@@ -32,6 +33,8 @@
     {
       "resources": [
         "src/page-proxy.js",
+        "src/player.html",
+        "src/player.js",
         "src/vendor/ffmpeg/index.js",
         "src/vendor/ffmpeg/classes.js",
         "src/vendor/ffmpeg/const.js",
