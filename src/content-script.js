@@ -1,11 +1,14 @@
 const REQUEST_TYPE = "MS_GSM_GOOGLE_AUDIO_REQUEST";
 const RESPONSE_TYPE = "MS_GSM_GOOGLE_AUDIO_RESPONSE";
 const decodedCache = new Map();
+const pendingPlayableResults = new Map();
 const extensionApi = globalThis.browser ?? globalThis.chrome;
 const lastProcessedUrlByElement = new WeakMap();
 const bridgedObjectUrls = new WeakMap();
 const attachmentLoadingState = new WeakMap();
 const attachmentPlayerState = new WeakMap();
+const pendingAttachmentPlayerData = new WeakMap();
+const attachmentPlayerObjectUrls = new Set();
 
 bootstrap();
 
@@ -15,6 +18,7 @@ function bootstrap() {
   installAttachmentClickInterception();
   installMediaRecovery();
   scanMediaElements(document);
+  installCleanupHandlers();
 }
 
 function injectPageProxy() {
@@ -68,32 +72,47 @@ async function getPlayableResult(url, buffer = null) {
     return decodedCache.get(normalizedUrl);
   }
 
-  const normalizedBuffer = buffer !== null ? Array.from(new Uint8Array(buffer)) : null;
-  const response = await sendRuntimeMessage({
-    type: normalizedBuffer !== null ? "GOOGLE_AUDIO_PROBE_BUFFER" : "GOOGLE_AUDIO_PROBE",
-    url: normalizedUrl,
-    buffer: normalizedBuffer
-  });
-
-  if (!response?.ok) {
-    throw new Error(response?.error ?? "Unknown decode error.");
+  const pending = pendingPlayableResults.get(normalizedUrl);
+  if (pending) {
+    return pending;
   }
 
-  if (response.result.kind !== "decoded") {
-    decodedCache.set(normalizedUrl, response.result);
-    return response.result;
+  const operation = (async () => {
+    const normalizedBuffer = buffer !== null ? Array.from(new Uint8Array(buffer)) : null;
+    const response = await sendRuntimeMessage({
+      type: normalizedBuffer !== null ? "GOOGLE_AUDIO_PROBE_BUFFER" : "GOOGLE_AUDIO_PROBE",
+      url: normalizedUrl,
+      buffer: normalizedBuffer
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error ?? "Unknown decode error.");
+    }
+
+    if (response.result.kind !== "decoded") {
+      decodedCache.set(normalizedUrl, response.result);
+      return response.result;
+    }
+
+    const bytes = new Uint8Array(response.result.buffer);
+    const blob = new Blob([bytes], { type: response.result.mimeType });
+    const playable = {
+      ...response.result,
+      blob,
+      objectUrl: URL.createObjectURL(blob)
+    };
+
+    decodedCache.set(normalizedUrl, playable);
+    return playable;
+  })();
+
+  pendingPlayableResults.set(normalizedUrl, operation);
+
+  try {
+    return await operation;
+  } finally {
+    pendingPlayableResults.delete(normalizedUrl);
   }
-
-  const bytes = new Uint8Array(response.result.buffer);
-  const blob = new Blob([bytes], { type: response.result.mimeType });
-  const playable = {
-    ...response.result,
-    blob,
-    objectUrl: URL.createObjectURL(blob)
-  };
-
-  decodedCache.set(normalizedUrl, playable);
-  return playable;
 }
 
 function normalizeUrl(url) {
@@ -228,38 +247,59 @@ async function ensureAttachmentPlayerData(link) {
     return existing;
   }
 
-  const cacheId = link.dataset.msGsmCacheId;
-  if (!cacheId) {
-    throw new Error("Missing cached playable id.");
+  const pending = pendingAttachmentPlayerData.get(link);
+  if (pending) {
+    return pending;
   }
 
-  const response = await sendRuntimeMessage({
-    type: "GET_CACHED_PLAYABLE",
-    cacheId
-  });
+  const operation = (async () => {
+    const cacheId = link.dataset.msGsmCacheId;
+    if (!cacheId) {
+      throw new Error("Missing cached playable id.");
+    }
 
-  if (!response?.ok || !response.result || !Array.isArray(response.result.buffer)) {
-    throw new Error(response?.error ?? "Invalid cached playable payload.");
+    const response = await sendRuntimeMessage({
+      type: "GET_CACHED_PLAYABLE",
+      cacheId
+    });
+
+    if (!response?.ok || !response.result || !Array.isArray(response.result.buffer)) {
+      throw new Error(response?.error ?? "Invalid cached playable payload.");
+    }
+
+    const bytes = new Uint8Array(response.result.buffer);
+    const mimeType = response.result.mimeType || "audio/wav";
+    const filename = response.result.filename || deriveAttachmentFilename(link);
+    const objectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    const state = { cacheId, objectUrl, mimeType, filename };
+    attachmentPlayerState.set(link, state);
+    attachmentPlayerObjectUrls.add(objectUrl);
+
+    void sendRuntimeMessage({
+      type: "RELEASE_CACHED_PLAYABLE",
+      cacheId
+    }).catch(() => undefined);
+
+    return state;
+  })();
+
+  pendingAttachmentPlayerData.set(link, operation);
+
+  try {
+    return await operation;
+  } finally {
+    pendingAttachmentPlayerData.delete(link);
   }
-
-  const bytes = new Uint8Array(response.result.buffer);
-  const mimeType = response.result.mimeType || "audio/wav";
-  const filename = response.result.filename || deriveAttachmentFilename(link);
-  const objectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
-  const state = { cacheId, objectUrl, mimeType, filename };
-  attachmentPlayerState.set(link, state);
-
-  void sendRuntimeMessage({
-    type: "RELEASE_CACHED_PLAYABLE",
-    cacheId
-  }).catch(() => undefined);
-
-  return state;
 }
 
 function showInlinePlayer(playerData) {
   dismissInlinePlayer();
-  ensureInlinePlayerStyles();
+  const host = document.createElement("div");
+  host.id = "ms-gsm-inline-player-host";
+  const shadowRoot = host.attachShadow({ mode: "open" });
+
+  const style = document.createElement("style");
+  style.textContent = getInlinePlayerStyles();
 
   const overlay = document.createElement("div");
   overlay.id = "ms-gsm-inline-player-overlay";
@@ -276,8 +316,6 @@ function showInlinePlayer(playerData) {
   audio.controls = true;
   audio.autoplay = true;
   audio.src = playerData.objectUrl;
-  audio.style.width = "100%";
-  audio.style.display = "block";
 
   const actions = document.createElement("div");
   actions.id = "ms-gsm-inline-player-actions";
@@ -297,7 +335,8 @@ function showInlinePlayer(playerData) {
   actions.append(download, close);
   card.append(title, audio, actions);
   overlay.append(card);
-  document.documentElement.append(overlay);
+  shadowRoot.append(style, overlay);
+  document.documentElement.append(host);
 
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) {
@@ -310,11 +349,30 @@ function showInlinePlayer(playerData) {
 }
 
 function dismissInlinePlayer() {
-  const overlay = document.getElementById("ms-gsm-inline-player-overlay");
-  if (overlay) {
-    overlay.remove();
+  const host = document.getElementById("ms-gsm-inline-player-host");
+  if (host) {
+    host.remove();
   }
   document.removeEventListener("keydown", handleInlinePlayerEscape);
+}
+
+function installCleanupHandlers() {
+  window.addEventListener("pagehide", () => {
+    dismissInlinePlayer();
+
+    for (const playable of decodedCache.values()) {
+      if (playable?.objectUrl) {
+        URL.revokeObjectURL(playable.objectUrl);
+      }
+    }
+    decodedCache.clear();
+    pendingPlayableResults.clear();
+
+    for (const objectUrl of attachmentPlayerObjectUrls) {
+      URL.revokeObjectURL(objectUrl);
+    }
+    attachmentPlayerObjectUrls.clear();
+  }, { once: true });
 }
 
 function handleInlinePlayerEscape(event) {
@@ -659,14 +717,8 @@ function ensureLoadingStyles() {
   document.documentElement.append(style);
 }
 
-function ensureInlinePlayerStyles() {
-  if (document.getElementById("ms-gsm-inline-player-style")) {
-    return;
-  }
-
-  const style = document.createElement("style");
-  style.id = "ms-gsm-inline-player-style";
-  style.textContent = `
+function getInlinePlayerStyles() {
+  return `
     #ms-gsm-inline-player-overlay {
       position: fixed;
       inset: 0;
@@ -721,6 +773,7 @@ function ensureInlinePlayerStyles() {
 
     #ms-gsm-inline-player-card audio {
       display: block;
+      width: 100%;
       margin: 0;
       flex: none;
       min-height: 0;
@@ -743,7 +796,6 @@ function ensureInlinePlayerStyles() {
       color: #202124;
     }
   `;
-  document.documentElement.append(style);
 }
 
 function sameUrl(left, right) {

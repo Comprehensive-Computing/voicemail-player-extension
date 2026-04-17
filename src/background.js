@@ -3,8 +3,13 @@ import { isProbablyWav, parseWav } from "./shared/wav.js";
 import { FFmpeg } from "./vendor/ffmpeg/index.js";
 
 const decodeCache = new Map();
+const pendingDecodeCache = new Map();
+const PLAYABLE_STORAGE_PREFIX = "playable:";
+const PLAYABLE_CACHE_TTL_MS = 30 * 60 * 1000;
 let ffmpegInstancePromise = null;
 let offscreenCreationPromise = null;
+
+void pruneExpiredPlayableEntries();
 
 extensionApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message) {
@@ -42,15 +47,32 @@ async function handleMessage(message) {
 }
 
 async function handleProbe(message) {
-  try {
-    const normalizedUrl = normalizeUrl(message.url);
-    if (decodeCache.has(normalizedUrl)) {
-      return {
-        ok: true,
-        result: decodeCache.get(normalizedUrl)
-      };
-    }
+  const normalizedUrl = normalizeUrl(message.url);
 
+  if (decodeCache.has(normalizedUrl)) {
+    return {
+      ok: true,
+      result: decodeCache.get(normalizedUrl)
+    };
+  }
+
+  const pending = pendingDecodeCache.get(normalizedUrl);
+  if (pending) {
+    return pending;
+  }
+
+  const operation = handleProbeMiss(message, normalizedUrl);
+  pendingDecodeCache.set(normalizedUrl, operation);
+
+  try {
+    return await operation;
+  } finally {
+    pendingDecodeCache.delete(normalizedUrl);
+  }
+}
+
+async function handleProbeMiss(message, normalizedUrl) {
+  try {
     const arrayBuffer = message.type === "GOOGLE_AUDIO_PROBE_BUFFER"
       ? normalizeIncomingBuffer(message.buffer)
       : await fetchAudioBuffer(normalizedUrl);
@@ -122,6 +144,14 @@ async function handleGetCachedPlayable(message) {
       return {
         ok: false,
         error: "Cached playable data not found."
+      };
+    }
+
+    if (isExpiredPlayableEntry(entry)) {
+      await removeStorageValue(getPlayableStorageKey(message.cacheId));
+      return {
+        ok: false,
+        error: "Cached playable data expired."
       };
     }
 
@@ -338,6 +368,24 @@ async function setStorageValue(key, value) {
   });
 }
 
+async function getAllStorageValues() {
+  if (extensionApi.storage.local.get.length <= 1) {
+    return extensionApi.storage.local.get(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    extensionApi.storage.local.get(null, (result) => {
+      const lastError = globalThis.chrome?.runtime?.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+
+      resolve(result || {});
+    });
+  });
+}
+
 async function getStorageValue(key) {
   if (extensionApi.storage.local.get.length <= 1) {
     const result = await extensionApi.storage.local.get(key);
@@ -377,5 +425,26 @@ async function removeStorageValue(key) {
 }
 
 function getPlayableStorageKey(cacheId) {
-  return `playable:${cacheId}`;
+  return `${PLAYABLE_STORAGE_PREFIX}${cacheId}`;
+}
+
+function isExpiredPlayableEntry(entry) {
+  return !entry?.createdAt || Date.now() - entry.createdAt > PLAYABLE_CACHE_TTL_MS;
+}
+
+async function pruneExpiredPlayableEntries() {
+  try {
+    const entries = await getAllStorageValues();
+    const expiredKeys = Object.entries(entries)
+      .filter(([key, value]) => key.startsWith(PLAYABLE_STORAGE_PREFIX) && isExpiredPlayableEntry(value))
+      .map(([key]) => key);
+
+    if (expiredKeys.length === 0) {
+      return;
+    }
+
+    await Promise.all(expiredKeys.map((key) => removeStorageValue(key)));
+  } catch {
+    // Ignore cache pruning failures.
+  }
 }
