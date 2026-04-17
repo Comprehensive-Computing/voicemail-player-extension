@@ -16,12 +16,6 @@ function readFourCc(view, offset) {
   );
 }
 
-function writeFourCc(view, offset, value) {
-  for (let index = 0; index < 4; index += 1) {
-    view.setUint8(offset + index, value.charCodeAt(index));
-  }
-}
-
 function decodeFmtChunk(view, offset, size) {
   if (size < 16) {
     throw new Error("Invalid fmt chunk.");
@@ -107,34 +101,4 @@ export function parseWav(arrayBuffer) {
     isPcm: format.formatTag === FORMAT_PCM,
     isMsGsm610: format.formatTag === FORMAT_MS_GSM610
   };
-}
-
-export function encodePcmWav({ samples, sampleRate }) {
-  if (!(samples instanceof Int16Array)) {
-    throw new Error("Expected Int16Array PCM samples.");
-  }
-
-  const dataSize = samples.length * 2;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  writeFourCc(view, 0, RIFF_FOURCC);
-  view.setUint32(4, 36 + dataSize, true);
-  writeFourCc(view, 8, WAVE_FOURCC);
-  writeFourCc(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, FORMAT_PCM, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeFourCc(view, 36, "data");
-  view.setUint32(40, dataSize, true);
-
-  for (let index = 0; index < samples.length; index += 1) {
-    view.setInt16(44 + index * 2, samples[index], true);
-  }
-
-  return buffer;
 }

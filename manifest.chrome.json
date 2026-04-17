@@ -36,8 +36,6 @@
         "src/page-proxy.js",
         "src/offscreen.html",
         "src/offscreen.js",
-        "src/player.html",
-        "src/player.js",
         "src/vendor/ffmpeg/index.js",
         "src/vendor/ffmpeg/classes.js",
         "src/vendor/ffmpeg/const.js",

@@ -219,7 +219,7 @@ async function reopenUpgradedAttachmentLink(link) {
 
 async function openInlinePlayerForLink(link) {
   const playerData = await ensureAttachmentPlayerData(link);
-  showInlinePlayer(link, playerData);
+  showInlinePlayer(playerData);
 }
 
 async function ensureAttachmentPlayerData(link) {
@@ -257,7 +257,7 @@ async function ensureAttachmentPlayerData(link) {
   return state;
 }
 
-function showInlinePlayer(link, playerData) {
+function showInlinePlayer(playerData) {
   dismissInlinePlayer();
   ensureInlinePlayerStyles();
 
