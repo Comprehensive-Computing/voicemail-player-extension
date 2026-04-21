@@ -9,6 +9,9 @@ const attachmentLoadingState = new WeakMap();
 const attachmentPlayerState = new WeakMap();
 const pendingAttachmentPlayerData = new WeakMap();
 const attachmentPlayerObjectUrls = new Set();
+const ATTACHMENT_TRANSCODE_MAX_ATTEMPTS = 3;
+const ATTACHMENT_TRANSCODE_RETRY_DELAYS_MS = [150, 500];
+const pendingAttachmentTranscodes = new WeakSet();
 
 bootstrap();
 
@@ -153,8 +156,17 @@ function installAttachmentClickInterception() {
 }
 
 async function transcodeAttachmentLink(link) {
+  if (pendingAttachmentTranscodes.has(link)) {
+    return;
+  }
+
+  pendingAttachmentTranscodes.add(link);
   const originalUrl = normalizeUrl(link.href);
-  const clearLoadingState = setAttachmentLoadingState(link, "Transcoding...");
+  const attempt = getAttachmentRetryAttempt(link);
+  const clearLoadingState = setAttachmentLoadingState(
+    link,
+    attempt > 0 ? `Retrying... (${attempt + 1}/${ATTACHMENT_TRANSCODE_MAX_ATTEMPTS})` : "Transcoding..."
+  );
 
   try {
     const buffer = await fetchAttachmentBuffer(originalUrl);
@@ -170,18 +182,25 @@ async function transcodeAttachmentLink(link) {
     }
 
     if (response.result?.kind !== "cached" || !response.result.cacheId) {
-      openAttachmentTarget(link, originalUrl);
-      return;
+      throw new Error("Attachment did not produce cached playable audio.");
     }
 
     link.href = originalUrl;
     link.dataset.msGsmOriginalHref = originalUrl;
     link.dataset.msGsmCacheId = response.result.cacheId;
+    resetAttachmentRetryAttempt(link);
     await openInlinePlayerForLink(link);
   } catch (error) {
-    console.warn("MS GSM WAV Support failed to transcode Gmail attachment link", error);
-    openAttachmentTarget(link, originalUrl);
+    if (attempt + 1 < ATTACHMENT_TRANSCODE_MAX_ATTEMPTS) {
+      setAttachmentRetryAttempt(link, attempt + 1);
+      updateAttachmentLoadingState(link, `Retrying... (${attempt + 2}/${ATTACHMENT_TRANSCODE_MAX_ATTEMPTS})`);
+      scheduleAttachmentRetryClick(link, ATTACHMENT_TRANSCODE_RETRY_DELAYS_MS[attempt] ?? 0);
+    } else {
+      resetAttachmentRetryAttempt(link);
+      console.warn("MS GSM WAV Support failed to transcode Gmail attachment link", error);
+    }
   } finally {
+    pendingAttachmentTranscodes.delete(link);
     clearLoadingState();
   }
 }
@@ -669,7 +688,6 @@ function setAttachmentLoadingState(link, label) {
   badge.style.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.24)";
   badge.style.pointerEvents = "none";
   badge.style.zIndex = "2";
-  badge.textContent = label;
 
   const spinner = document.createElement("span");
   spinner.style.width = "10px";
@@ -679,7 +697,12 @@ function setAttachmentLoadingState(link, label) {
   spinner.style.borderRadius = "50%";
   spinner.style.display = "inline-block";
   spinner.style.animation = "ms-gsm-spin 0.8s linear infinite";
-  badge.prepend(spinner);
+
+  const labelNode = document.createElement("span");
+  labelNode.dataset.msGsmLoadingLabel = "1";
+  labelNode.textContent = label;
+
+  badge.append(spinner, labelNode);
 
   ensureLoadingStyles();
   link.append(badge);
@@ -699,6 +722,18 @@ function clearAttachmentLoadingState(link) {
   link.style.position = state.previousPosition;
   link.removeAttribute("aria-busy");
   attachmentLoadingState.delete(link);
+}
+
+function updateAttachmentLoadingState(link, label) {
+  const state = attachmentLoadingState.get(link);
+  if (!state) {
+    return;
+  }
+
+  const labelNode = state.badge.querySelector("[data-ms-gsm-loading-label]");
+  if (labelNode) {
+    labelNode.textContent = label;
+  }
 }
 
 function ensureLoadingStyles() {
@@ -812,6 +847,39 @@ function safeReadCurrentTime(media) {
   } catch {
     return 0;
   }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function scheduleAttachmentRetryClick(link, delayMs) {
+  void delay(delayMs).then(() => {
+    if (!link.isConnected) {
+      return;
+    }
+
+    link.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      button: 0
+    }));
+  });
+}
+
+function getAttachmentRetryAttempt(link) {
+  return Number.parseInt(link.dataset.msGsmRetryAttempt || "0", 10) || 0;
+}
+
+function setAttachmentRetryAttempt(link, attempt) {
+  link.dataset.msGsmRetryAttempt = String(attempt);
+}
+
+function resetAttachmentRetryAttempt(link) {
+  delete link.dataset.msGsmRetryAttempt;
 }
 
 function sendRuntimeMessage(message) {
