@@ -3,9 +3,13 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $distRoot = Join-Path $root "dist"
 $target = Join-Path $distRoot "chrome"
+$archive = Join-Path $distRoot "chrome.zip"
 
 if (Test-Path $target) {
   Remove-Item -LiteralPath $target -Recurse -Force
+}
+if (Test-Path $archive) {
+  Remove-Item -LiteralPath $archive -Force
 }
 
 New-Item -ItemType Directory -Path $target | Out-Null
@@ -40,4 +44,7 @@ Copy-Item -LiteralPath (Join-Path $root "node_modules\\@ffmpeg\\ffmpeg\\dist\\es
 Copy-Item -LiteralPath (Join-Path $root "node_modules\\@ffmpeg\\core\\dist\\esm\\ffmpeg-core.js") -Destination (Join-Path $target "src\\vendor\\ffmpeg-core\\ffmpeg-core.js")
 Copy-Item -LiteralPath (Join-Path $root "node_modules\\@ffmpeg\\core\\dist\\esm\\ffmpeg-core.wasm") -Destination (Join-Path $target "src\\vendor\\ffmpeg-core\\ffmpeg-core.wasm")
 
+Compress-Archive -Path (Join-Path $target "*") -DestinationPath $archive -Force
+
 Write-Host "Chrome build ready at $target"
+Write-Host "Chrome package ready at $archive"

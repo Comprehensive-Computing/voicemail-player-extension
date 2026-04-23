@@ -2,6 +2,13 @@
   "name": "ms-gsm-wav-support",
   "version": "1.0.0",
   "description": "Gmail extension that transcodes MS GSM 6.10 WAV voicemail attachments into playable PCM WAV audio.",
+  "scripts": {
+    "build": "npm run build:chrome && npm run build:firefox",
+    "build:chrome": "bash ./build-chrome.sh",
+    "build:firefox": "bash ./build-firefox.sh",
+    "build:chrome:ps1": "pwsh -File ./build-chrome.ps1",
+    "build:firefox:ps1": "pwsh -File ./build-firefox.ps1"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
