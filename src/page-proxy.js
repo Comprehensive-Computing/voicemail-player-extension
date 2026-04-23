@@ -1,6 +1,7 @@
 (function pageProxyBootstrap() {
   const REQUEST_TYPE = "MS_GSM_GOOGLE_AUDIO_REQUEST";
   const RESPONSE_TYPE = "MS_GSM_GOOGLE_AUDIO_RESPONSE";
+  const META_TYPE = "MS_GSM_GMAIL_META";
   const pending = new Map();
   let nextRequestId = 1;
   const nativeFetch = window.fetch.bind(window);
@@ -117,6 +118,7 @@
       const request = input instanceof Request ? input : null;
       const method = String(request?.method || init?.method || "GET").toUpperCase();
       const url = normalizeUrl(input instanceof Request ? input.url : input);
+      reportGmailIk(url);
 
       if (method !== "GET" || !shouldProbeFetch(url, request, init)) {
         return originalFetch.call(this, input, init);
@@ -143,6 +145,7 @@
     const originalSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function patchedOpen(method, url, async = true, username, password) {
+      reportGmailIk(url);
       this.__msGsmGoogleAudio = {
         method: String(method || "GET").toUpperCase(),
         url: normalizeUrl(url),
@@ -340,6 +343,27 @@
 
   function normalizeUrl(url) {
     return new URL(url, window.location.href).href;
+  }
+
+  function reportGmailIk(url) {
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (parsed.hostname !== "mail.google.com") {
+        return;
+      }
+
+      const ik = parsed.searchParams.get("ik");
+      if (!ik) {
+        return;
+      }
+
+      window.postMessage({
+        type: META_TYPE,
+        ik
+      }, "*");
+    } catch {
+      // Ignore malformed URLs.
+    }
   }
 
   function defineValue(target, name, value) {

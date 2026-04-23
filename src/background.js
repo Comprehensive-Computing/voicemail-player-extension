@@ -184,16 +184,45 @@ function normalizeUrl(url) {
 }
 
 async function fetchAudioBuffer(url) {
-  const response = await fetch(url, {
+  const fetchOptions = {
     credentials: "include",
-    cache: "default"
-  });
+    cache: "no-store",
+    method: "GET",
+    mode: "cors",
+    headers: {
+      Accept: "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5",
+      Range: "bytes=0-",
+      Pragma: "no-cache",
+      "Cache-Control": "no-cache"
+    }
+  };
+
+  const referrer = getAudioFetchReferrer(url);
+  if (referrer) {
+    fetchOptions.referrer = referrer;
+    fetchOptions.referrerPolicy = "strict-origin-when-cross-origin";
+  }
+
+  const response = await fetch(url, fetchOptions);
 
   if (!response.ok) {
     throw new Error(`Fetch failed with status ${response.status}.`);
   }
 
   return response.arrayBuffer();
+}
+
+function getAudioFetchReferrer(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "mail.google.com" || parsed.hostname === "mail-attachment.googleusercontent.com") {
+      return "https://mail.google.com/";
+    }
+  } catch {
+    // Ignore malformed URLs.
+  }
+
+  return null;
 }
 
 function normalizeIncomingBuffer(buffer) {

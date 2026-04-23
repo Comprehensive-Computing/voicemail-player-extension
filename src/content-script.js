@@ -1,5 +1,7 @@
 const REQUEST_TYPE = "MS_GSM_GOOGLE_AUDIO_REQUEST";
 const RESPONSE_TYPE = "MS_GSM_GOOGLE_AUDIO_RESPONSE";
+const META_TYPE = "MS_GSM_GMAIL_META";
+const GMAIL_IK_STORAGE_KEY = "msGsmGmailIk";
 const decodedCache = new Map();
 const pendingPlayableResults = new Map();
 const extensionApi = globalThis.browser ?? globalThis.chrome;
@@ -12,6 +14,7 @@ const attachmentPlayerObjectUrls = new Set();
 const ATTACHMENT_TRANSCODE_MAX_ATTEMPTS = 3;
 const ATTACHMENT_TRANSCODE_RETRY_DELAYS_MS = [150, 500];
 const pendingAttachmentTranscodes = new WeakSet();
+let cachedGmailIk = sessionStorage.getItem(GMAIL_IK_STORAGE_KEY) || null;
 
 bootstrap();
 
@@ -40,6 +43,12 @@ function installPageBridge() {
     }
 
     const data = event.data;
+    if (data?.type === META_TYPE && typeof data.ik === "string" && /^[0-9a-f]+$/i.test(data.ik)) {
+      cachedGmailIk = data.ik;
+      sessionStorage.setItem(GMAIL_IK_STORAGE_KEY, data.ik);
+      return;
+    }
+
     if (!data || data.type !== REQUEST_TYPE || typeof data.requestId !== "number" || typeof data.url !== "string") {
       return;
     }
@@ -123,6 +132,27 @@ function normalizeUrl(url) {
 }
 
 function installAttachmentClickInterception() {
+  const suppressNativeInboxChipAction = (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const chip = findGmailInboxAttachmentChip(target);
+    if (!(chip instanceof HTMLElement)) {
+      return;
+    }
+
+    if (!isGmailInboxWavAttachmentChip(chip) && !isUpgradedAttachmentTarget(chip)) {
+      return;
+    }
+
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+
+  document.addEventListener("pointerdown", suppressNativeInboxChipAction, true);
+  document.addEventListener("mousedown", suppressNativeInboxChipAction, true);
   document.addEventListener("click", (event) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
@@ -134,37 +164,57 @@ function installAttachmentClickInterception() {
     }
 
     const link = target.closest("a[href]");
-    if (!(link instanceof HTMLAnchorElement)) {
+    const chip = findGmailInboxAttachmentChip(target);
+
+    if (!(link instanceof HTMLAnchorElement) && !(chip instanceof HTMLElement)) {
       return;
     }
 
-    if (isUpgradedAttachmentLink(link)) {
-      event.preventDefault();
-      event.stopPropagation();
-      reopenUpgradedAttachmentLink(link);
+    const upgradedTarget = link instanceof HTMLElement ? link : chip;
+    if (upgradedTarget && isUpgradedAttachmentTarget(upgradedTarget)) {
+      suppressAttachmentEvent(event);
+      reopenUpgradedAttachmentTarget(upgradedTarget);
       return;
     }
 
-    if (!isGmailWavAttachmentLink(link)) {
+    if (link instanceof HTMLAnchorElement && isGmailWavAttachmentLink(link)) {
+      suppressAttachmentEvent(event);
+      void transcodeResolvedAttachmentTarget(link, normalizeUrl(link.href));
       return;
     }
 
-    event.preventDefault();
-    event.stopPropagation();
-    void transcodeAttachmentLink(link);
+    if (chip instanceof HTMLElement && isGmailInboxWavAttachmentChip(chip)) {
+      const resolvedUrl = resolveInboxChipAttachmentUrl(chip) || buildInboxChipAttachmentUrl(chip);
+      suppressAttachmentEvent(event);
+      if (resolvedUrl) {
+        void transcodeResolvedAttachmentTarget(chip, resolvedUrl);
+      } else {
+        console.warn("MS GSM WAV Support could not build inbox attachment URL", getInboxChipAttachmentParts(chip));
+      }
+      return;
+    }
   }, true);
 }
 
+function suppressAttachmentEvent(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+}
+
 async function transcodeAttachmentLink(link) {
-  if (pendingAttachmentTranscodes.has(link)) {
+  await transcodeResolvedAttachmentTarget(link, normalizeUrl(link.href));
+}
+
+async function transcodeResolvedAttachmentTarget(target, originalUrl) {
+  if (pendingAttachmentTranscodes.has(target)) {
     return;
   }
 
-  pendingAttachmentTranscodes.add(link);
-  const originalUrl = normalizeUrl(link.href);
-  const attempt = getAttachmentRetryAttempt(link);
+  pendingAttachmentTranscodes.add(target);
+  const attempt = getAttachmentRetryAttempt(target);
   const clearLoadingState = setAttachmentLoadingState(
-    link,
+    target,
     attempt > 0 ? `Retrying... (${attempt + 1}/${ATTACHMENT_TRANSCODE_MAX_ATTEMPTS})` : "Transcoding..."
   );
 
@@ -173,7 +223,7 @@ async function transcodeAttachmentLink(link) {
     const response = await sendRuntimeMessage({
       type: "START_ATTACHMENT_TRANSCODE",
       url: originalUrl,
-      filename: deriveAttachmentFilename(link),
+      filename: deriveAttachmentFilename(target),
       buffer: Array.from(new Uint8Array(buffer))
     });
 
@@ -185,22 +235,24 @@ async function transcodeAttachmentLink(link) {
       throw new Error("Attachment did not produce cached playable audio.");
     }
 
-    link.href = originalUrl;
-    link.dataset.msGsmOriginalHref = originalUrl;
-    link.dataset.msGsmCacheId = response.result.cacheId;
-    resetAttachmentRetryAttempt(link);
-    await openInlinePlayerForLink(link);
+    target.dataset.msGsmOriginalHref = originalUrl;
+    target.dataset.msGsmCacheId = response.result.cacheId;
+    if (target instanceof HTMLAnchorElement) {
+      target.href = originalUrl;
+    }
+    resetAttachmentRetryAttempt(target);
+    await openInlinePlayerForTarget(target);
   } catch (error) {
     if (attempt + 1 < ATTACHMENT_TRANSCODE_MAX_ATTEMPTS) {
-      setAttachmentRetryAttempt(link, attempt + 1);
-      updateAttachmentLoadingState(link, `Retrying... (${attempt + 2}/${ATTACHMENT_TRANSCODE_MAX_ATTEMPTS})`);
-      scheduleAttachmentRetryClick(link, ATTACHMENT_TRANSCODE_RETRY_DELAYS_MS[attempt] ?? 0);
+      setAttachmentRetryAttempt(target, attempt + 1);
+      updateAttachmentLoadingState(target, `Retrying... (${attempt + 2}/${ATTACHMENT_TRANSCODE_MAX_ATTEMPTS})`);
+      scheduleAttachmentRetryClick(target, ATTACHMENT_TRANSCODE_RETRY_DELAYS_MS[attempt] ?? 0);
     } else {
-      resetAttachmentRetryAttempt(link);
+      resetAttachmentRetryAttempt(target);
       console.warn("MS GSM WAV Support failed to transcode Gmail attachment link", error);
     }
   } finally {
-    pendingAttachmentTranscodes.delete(link);
+    pendingAttachmentTranscodes.delete(target);
     clearLoadingState();
   }
 }
@@ -228,35 +280,56 @@ function openAttachmentTarget(link, url) {
 }
 
 function deriveAttachmentFilename(link) {
+  const title = link.getAttribute?.("title");
+  if (title && /\.wav\b/i.test(title)) {
+    return title.trim();
+  }
+
   const text = link.textContent?.match(/[\w(). -]+\.wav\b/i)?.[0];
   if (text) {
     return text.trim();
   }
 
-  try {
-    const url = new URL(link.href, window.location.href);
-    const lastSegment = url.pathname.split("/").pop();
-    if (lastSegment && lastSegment.toLowerCase().endsWith(".wav")) {
-      return lastSegment;
+  if ("href" in link && typeof link.href === "string") {
+    try {
+      const url = new URL(link.href, window.location.href);
+      const lastSegment = url.pathname.split("/").pop();
+      if (lastSegment && lastSegment.toLowerCase().endsWith(".wav")) {
+        return lastSegment;
+      }
+    } catch {
+      // Fall through to default.
     }
-  } catch {
-    // Fall through to default.
   }
 
   return "attachment.wav";
 }
 
 async function reopenUpgradedAttachmentLink(link) {
+  await reopenUpgradedAttachmentTarget(link);
+}
+
+async function reopenUpgradedAttachmentTarget(target) {
+  if (pendingAttachmentTranscodes.has(target)) {
+    return;
+  }
+
   try {
-    await openInlinePlayerForLink(link);
+    await openInlinePlayerForTarget(target);
   } catch (error) {
     console.warn("MS GSM WAV Support failed to reopen inline player", error);
-    openAttachmentTarget(link, link.dataset.msGsmOriginalHref || link.href);
+    if (target instanceof HTMLAnchorElement) {
+      openAttachmentTarget(target, target.dataset.msGsmOriginalHref || target.href);
+    }
   }
 }
 
 async function openInlinePlayerForLink(link) {
-  const playerData = await ensureAttachmentPlayerData(link);
+  await openInlinePlayerForTarget(link);
+}
+
+async function openInlinePlayerForTarget(target) {
+  const playerData = await ensureAttachmentPlayerData(target);
   showInlinePlayer(playerData);
 }
 
@@ -657,8 +730,231 @@ function isGmailWavAttachmentLink(link) {
   }
 }
 
+function isGmailInboxWavAttachmentChip(chip) {
+  return chip.getAttribute("jsname") === "DMMSG" && /\.wav\b/i.test(chip.getAttribute("title") || chip.textContent || "");
+}
+
+function findGmailInboxAttachmentChip(target) {
+  return target.closest('div.brc[data-chipenabled="true"][jsname="DMMSG"]');
+}
+
+function resolveInboxChipAttachmentUrl(chip) {
+  const filename = deriveAttachmentFilename(chip).toLowerCase();
+  const threadToken = extractThreadTokenFromChip(chip);
+  const candidates = document.querySelectorAll('a[href*="view=att"], source[type="audio/x-wav"][src], audio[src*="view=att"]');
+
+  for (const candidate of candidates) {
+    const candidateUrl = candidate instanceof HTMLAnchorElement ? candidate.href : candidate.src;
+    if (!candidateUrl) {
+      continue;
+    }
+
+    const candidateFilename = deriveAttachmentFilename(candidate).toLowerCase();
+    if (candidateFilename && candidateFilename !== filename) {
+      continue;
+    }
+
+    const normalizedUrl = normalizeUrl(candidateUrl);
+    if (!threadToken || normalizedUrl.includes(threadToken)) {
+      return normalizedUrl;
+    }
+  }
+
+  if (threadToken) {
+    for (const candidate of candidates) {
+      const candidateUrl = candidate instanceof HTMLAnchorElement ? candidate.href : candidate.src;
+      if (!candidateUrl) {
+        continue;
+      }
+
+      const normalizedUrl = normalizeUrl(candidateUrl);
+      if (normalizedUrl.includes(threadToken)) {
+        return normalizedUrl;
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildInboxChipAttachmentUrl(chip) {
+  const { ik, ui, legacyThreadId, permmsgid, attid } = getInboxChipAttachmentParts(chip);
+
+  if (!ik || !legacyThreadId || !permmsgid || !attid) {
+    return null;
+  }
+
+  const url = new URL(`https://mail.google.com/mail/u/${ui}`);
+  url.searchParams.set("ui", "2");
+  url.searchParams.set("ik", ik);
+  url.searchParams.set("attid", attid);
+  url.searchParams.set("permmsgid", permmsgid);
+  url.searchParams.set("th", legacyThreadId);
+  url.searchParams.set("view", "att");
+  url.searchParams.set("zw", "");
+  url.searchParams.set("disp", "safe");
+  return url.toString();
+}
+
+function getInboxChipAttachmentParts(chip) {
+  return {
+    ik: getGmailIk(),
+    ui: getGmailAccountIndex(),
+    legacyThreadId: extractLegacyThreadIdFromChip(chip),
+    permmsgid: extractPermMessageIdFromChip(chip),
+    attid: extractAttachmentIdFromChip(chip)
+  };
+}
+
+function extractThreadTokenFromChip(chip) {
+  const jslog = chip.getAttribute("jslog") || "";
+  const threadMatch = jslog.match(/#thread-[^:"\]]+/i);
+  return threadMatch?.[0] || null;
+}
+
+function extractLegacyThreadIdFromChip(chip) {
+  const row = chip.closest("tr");
+  if (!(row instanceof HTMLTableRowElement)) {
+    return null;
+  }
+
+  const threadNode = row.querySelector("[data-legacy-thread-id]");
+  return threadNode?.getAttribute("data-legacy-thread-id") || null;
+}
+
+function extractPermMessageIdFromChip(chip) {
+  const row = chip.closest("tr");
+  const rowThreadToken = row?.querySelector("[data-thread-id]")?.getAttribute("data-thread-id") || null;
+  const threadToken = rowThreadToken || extractThreadTokenFromChip(chip);
+  if (!threadToken) {
+    return null;
+  }
+
+  return threadToken.replace(/^#?thread-f:/i, "msg-f:");
+}
+
+function extractAttachmentIdFromChip(chip) {
+  const rawIndex = Number.parseInt(chip.getAttribute("data-index") || "0", 10);
+  if (!Number.isFinite(rawIndex) || rawIndex < 0) {
+    return null;
+  }
+
+  return `0.${rawIndex + 1}`;
+}
+
+function getGmailAccountIndex() {
+  const pathnameMatch = window.location.pathname.match(/\/mail\/u\/(\d+)/i);
+  return pathnameMatch?.[1] || "0";
+}
+
+function getGmailIk() {
+  if (cachedGmailIk && /^[0-9a-f]+$/i.test(cachedGmailIk)) {
+    return cachedGmailIk;
+  }
+
+  const globalIk = globalThis.GLOBALS?.[9];
+  if (typeof globalIk === "string" && /^[0-9a-f]+$/i.test(globalIk)) {
+    return globalIk;
+  }
+
+  const globalCandidate = findHexTokenInValue(globalThis.GLOBALS);
+  if (globalCandidate) {
+    return globalCandidate;
+  }
+
+  const wizCandidate = findHexTokenInValue(globalThis.WIZ_global_data);
+  if (wizCandidate) {
+    return wizCandidate;
+  }
+
+  const ijCandidate = findHexTokenInValue(globalThis.IJ_values);
+  if (ijCandidate) {
+    return ijCandidate;
+  }
+
+  const scriptIkMatch = findGmailIkInScripts();
+  if (scriptIkMatch) {
+    return scriptIkMatch;
+  }
+
+  const inlineIkMatch = document.documentElement.innerHTML.match(/[?&]ik=([0-9a-f]{8,})\b/i);
+  if (inlineIkMatch?.[1]) {
+    return inlineIkMatch[1];
+  }
+
+  return null;
+}
+
+function findGmailIkInScripts() {
+  for (const script of document.scripts) {
+    const text = script.textContent;
+    if (!text) {
+      continue;
+    }
+
+    const explicitMatch =
+      text.match(/[?&]ik=([0-9a-f]{8,})\b/i) ||
+      text.match(/\bik["']?\s*[:=]\s*["']([0-9a-f]{8,})["']/i);
+
+    if (explicitMatch?.[1]) {
+      return explicitMatch[1];
+    }
+  }
+
+  return null;
+}
+
+function findHexTokenInValue(value, seen = new WeakSet()) {
+  if (typeof value === "string") {
+    if (/^[0-9a-f]{8,}$/i.test(value)) {
+      return value;
+    }
+
+    const embeddedMatch =
+      value.match(/[?&]ik=([0-9a-f]{8,})\b/i) ||
+      value.match(/\b([0-9a-f]{10,})\b/i);
+    return embeddedMatch?.[1] || null;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const candidate = findHexTokenInValue(item, seen);
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (/ik/i.test(key) && typeof nestedValue === "string" && /^[0-9a-f]{8,}$/i.test(nestedValue)) {
+      return nestedValue;
+    }
+
+    const candidate = findHexTokenInValue(nestedValue, seen);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function isUpgradedAttachmentLink(link) {
-  return Boolean(link.dataset.msGsmOriginalHref && link.dataset.msGsmCacheId);
+  return isUpgradedAttachmentTarget(link);
+}
+
+function isUpgradedAttachmentTarget(target) {
+  return Boolean(target.dataset.msGsmOriginalHref && target.dataset.msGsmCacheId);
 }
 
 function setAttachmentLoadingState(link, label) {
