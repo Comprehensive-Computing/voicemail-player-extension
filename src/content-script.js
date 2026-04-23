@@ -216,14 +216,27 @@ async function transcodeResolvedAttachmentTarget(target, originalUrl) {
 
   try {
     const buffer = await fetchAttachmentBuffer(originalUrl);
+    const filename = deriveAttachmentFilename(target);
     const response = await sendRuntimeMessage({
       type: "START_ATTACHMENT_TRANSCODE",
-      filename: deriveAttachmentFilename(target),
+      filename,
       buffer: Array.from(new Uint8Array(buffer))
     });
 
     if (!response?.ok) {
       throw new Error(response?.error ?? "Attachment transcode failed.");
+    }
+
+    if (response.result?.kind === "pcm") {
+      setDirectAttachmentPlayerState(target, buffer, response.result.mimeType || "audio/wav", filename);
+      target.dataset.msGsmOriginalHref = originalUrl;
+      delete target.dataset.msGsmCacheId;
+      if (target instanceof HTMLAnchorElement) {
+        target.href = originalUrl;
+      }
+      resetAttachmentRetryAttempt(target);
+      await openInlinePlayerForTarget(target);
+      return;
     }
 
     if (response.result?.kind !== "cached" || !response.result.cacheId) {
@@ -301,6 +314,25 @@ async function reopenUpgradedAttachmentTarget(target) {
   } catch (error) {
     console.warn("MS GSM WAV Support failed to reopen inline player", error);
   }
+}
+
+function setDirectAttachmentPlayerState(target, arrayBuffer, mimeType, filename) {
+  const existing = attachmentPlayerState.get(target);
+  if (existing?.objectUrl) {
+    URL.revokeObjectURL(existing.objectUrl);
+    attachmentPlayerObjectUrls.delete(existing.objectUrl);
+  }
+
+  const objectUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: mimeType }));
+  const state = {
+    cacheId: null,
+    objectUrl,
+    mimeType,
+    filename
+  };
+
+  attachmentPlayerState.set(target, state);
+  attachmentPlayerObjectUrls.add(objectUrl);
 }
 
 async function openInlinePlayerForTarget(target) {
@@ -709,8 +741,8 @@ function findGmailInboxAttachmentChip(target) {
 }
 
 function resolveInboxChipAttachmentUrl(chip) {
+  const { legacyThreadId, permmsgid, attid } = getInboxChipAttachmentParts(chip);
   const filename = deriveAttachmentFilename(chip).toLowerCase();
-  const threadToken = extractThreadTokenFromChip(chip);
   const candidates = document.querySelectorAll('a[href*="view=att"], source[type="audio/x-wav"][src], audio[src*="view=att"]');
 
   for (const candidate of candidates) {
@@ -725,12 +757,17 @@ function resolveInboxChipAttachmentUrl(chip) {
     }
 
     const normalizedUrl = normalizeUrl(candidateUrl);
-    if (!threadToken || normalizedUrl.includes(threadToken)) {
+    const parsedUrl = new URL(normalizedUrl);
+    if (
+      (!permmsgid || parsedUrl.searchParams.get("permmsgid") === permmsgid) &&
+      (!legacyThreadId || parsedUrl.searchParams.get("th") === legacyThreadId) &&
+      (!attid || parsedUrl.searchParams.get("attid") === attid)
+    ) {
       return normalizedUrl;
     }
   }
 
-  if (threadToken) {
+  if (permmsgid || legacyThreadId) {
     for (const candidate of candidates) {
       const candidateUrl = candidate instanceof HTMLAnchorElement ? candidate.href : candidate.src;
       if (!candidateUrl) {
@@ -738,7 +775,11 @@ function resolveInboxChipAttachmentUrl(chip) {
       }
 
       const normalizedUrl = normalizeUrl(candidateUrl);
-      if (normalizedUrl.includes(threadToken)) {
+      const parsedUrl = new URL(normalizedUrl);
+      if (
+        (permmsgid && parsedUrl.searchParams.get("permmsgid") === permmsgid) ||
+        (legacyThreadId && parsedUrl.searchParams.get("th") === legacyThreadId)
+      ) {
         return normalizedUrl;
       }
     }
@@ -748,9 +789,10 @@ function resolveInboxChipAttachmentUrl(chip) {
 }
 
 function buildInboxChipAttachmentUrl(chip) {
-  const { ik, ui, legacyThreadId, permmsgid, attid } = getInboxChipAttachmentParts(chip);
+  const { ik, ui, legacyThreadId, legacyMessageId, permmsgid, attid } = getInboxChipAttachmentParts(chip);
+  const threadTarget = permmsgid ? legacyThreadId : (legacyMessageId || legacyThreadId);
 
-  if (!ik || !legacyThreadId || !permmsgid || !attid) {
+  if (!ik || !threadTarget || !attid) {
     return null;
   }
 
@@ -758,8 +800,10 @@ function buildInboxChipAttachmentUrl(chip) {
   url.searchParams.set("ui", "2");
   url.searchParams.set("ik", ik);
   url.searchParams.set("attid", attid);
-  url.searchParams.set("permmsgid", permmsgid);
-  url.searchParams.set("th", legacyThreadId);
+  if (permmsgid) {
+    url.searchParams.set("permmsgid", permmsgid);
+  }
+  url.searchParams.set("th", threadTarget);
   url.searchParams.set("view", "att");
   url.searchParams.set("zw", "");
   url.searchParams.set("disp", "safe");
@@ -771,6 +815,7 @@ function getInboxChipAttachmentParts(chip) {
     ik: getGmailIk(),
     ui: getGmailAccountIndex(),
     legacyThreadId: extractLegacyThreadIdFromChip(chip),
+    legacyMessageId: extractLegacyMessageIdFromChip(chip),
     permmsgid: extractPermMessageIdFromChip(chip),
     attid: extractAttachmentIdFromChip(chip)
   };
@@ -778,8 +823,15 @@ function getInboxChipAttachmentParts(chip) {
 
 function extractThreadTokenFromChip(chip) {
   const jslog = chip.getAttribute("jslog") || "";
-  const threadMatch = jslog.match(/#thread-[^:"\]]+/i);
-  return threadMatch?.[0] || null;
+  return extractMessageThreadTokenFromJslog(jslog);
+}
+
+function tryDecodeJslogPayload(payload) {
+  try {
+    return globalThis.atob(payload);
+  } catch {
+    return null;
+  }
 }
 
 function extractLegacyThreadIdFromChip(chip) {
@@ -792,15 +844,71 @@ function extractLegacyThreadIdFromChip(chip) {
   return threadNode?.getAttribute("data-legacy-thread-id") || null;
 }
 
+function extractLegacyMessageIdFromChip(chip) {
+  const row = chip.closest("tr");
+  if (!(row instanceof HTMLTableRowElement)) {
+    return null;
+  }
+
+  const messageNode = row.querySelector("[data-legacy-last-message-id]");
+  return messageNode?.getAttribute("data-legacy-last-message-id") || null;
+}
+
 function extractPermMessageIdFromChip(chip) {
   const row = chip.closest("tr");
   const rowThreadToken = row?.querySelector("[data-thread-id]")?.getAttribute("data-thread-id") || null;
-  const threadToken = rowThreadToken || extractThreadTokenFromChip(chip);
+  const rowJslogThreadToken = extractMessageThreadTokenFromJslog(row?.getAttribute("jslog") || "");
+  const threadToken =
+    normalizeMessageThreadToken(rowThreadToken) ||
+    rowJslogThreadToken ||
+    extractThreadTokenFromChip(chip);
   if (!threadToken) {
     return null;
   }
 
   return threadToken.replace(/^#?thread-f:/i, "msg-f:");
+}
+
+function normalizeMessageThreadToken(threadToken) {
+  if (typeof threadToken !== "string") {
+    return null;
+  }
+
+  if (/^#?thread-f:/i.test(threadToken)) {
+    return threadToken;
+  }
+
+  if (/^msg-f:/i.test(threadToken)) {
+    return threadToken.replace(/^msg-f:/i, "#thread-f:");
+  }
+
+  return null;
+}
+
+function extractMessageThreadTokenFromJslog(jslog) {
+  if (typeof jslog !== "string" || !jslog) {
+    return null;
+  }
+
+  const threadMatch = jslog.match(/#thread-[^:"\]]+/i);
+  if (threadMatch?.[0]) {
+    return normalizeMessageThreadToken(threadMatch[0]);
+  }
+
+  const encodedPayloadMatches = [...jslog.matchAll(/\b\d+:([A-Za-z0-9+/=]+)/g)];
+  for (const match of encodedPayloadMatches) {
+    const decoded = tryDecodeJslogPayload(match[1]);
+    if (!decoded) {
+      continue;
+    }
+
+    const decodedThreadMatch = decoded.match(/#thread-f:[^"\],]+/i);
+    if (decodedThreadMatch?.[0]) {
+      return normalizeMessageThreadToken(decodedThreadMatch[0]);
+    }
+  }
+
+  return null;
 }
 
 function extractAttachmentIdFromChip(chip) {
@@ -920,7 +1028,7 @@ function findHexTokenInValue(value, seen = new WeakSet()) {
 }
 
 function isUpgradedAttachmentTarget(target) {
-  return Boolean(target.dataset.msGsmOriginalHref && target.dataset.msGsmCacheId);
+  return Boolean(target.dataset.msGsmOriginalHref && (target.dataset.msGsmCacheId || attachmentPlayerState.has(target)));
 }
 
 function setAttachmentLoadingState(link, label) {

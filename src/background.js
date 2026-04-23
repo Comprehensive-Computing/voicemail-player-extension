@@ -105,7 +105,17 @@ async function handleAttachmentTranscode(message) {
     const arrayBuffer = normalizeIncomingBuffer(message.buffer);
     const processed = await processAudioBuffer(arrayBuffer);
 
-    if (processed.kind !== "decoded" && processed.kind !== "pcm") {
+    if (processed.kind === "pcm") {
+      return {
+        ok: true,
+        result: {
+          kind: "pcm",
+          mimeType: processed.mimeType || "audio/wav"
+        }
+      };
+    }
+
+    if (processed.kind !== "decoded") {
       return {
         ok: true,
         result: processed
@@ -113,11 +123,10 @@ async function handleAttachmentTranscode(message) {
     }
 
     const cacheId = crypto.randomUUID();
-    const playableBuffer = processed.kind === "decoded" ? processed.buffer : arrayBuffer;
     await setStorageValue(getPlayableStorageKey(cacheId), {
       filename: message.filename || "attachment.wav",
       mimeType: "audio/wav",
-      buffer: Array.from(new Uint8Array(playableBuffer)),
+      buffer: Array.from(new Uint8Array(processed.buffer)),
       createdAt: Date.now()
     });
 
