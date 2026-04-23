@@ -202,10 +202,6 @@ function suppressAttachmentEvent(event) {
   event.stopImmediatePropagation();
 }
 
-async function transcodeAttachmentLink(link) {
-  await transcodeResolvedAttachmentTarget(link, normalizeUrl(link.href));
-}
-
 async function transcodeResolvedAttachmentTarget(target, originalUrl) {
   if (pendingAttachmentTranscodes.has(target)) {
     return;
@@ -222,7 +218,6 @@ async function transcodeResolvedAttachmentTarget(target, originalUrl) {
     const buffer = await fetchAttachmentBuffer(originalUrl);
     const response = await sendRuntimeMessage({
       type: "START_ATTACHMENT_TRANSCODE",
-      url: originalUrl,
       filename: deriveAttachmentFilename(target),
       buffer: Array.from(new Uint8Array(buffer))
     });
@@ -270,15 +265,6 @@ async function fetchAttachmentBuffer(url) {
   return response.arrayBuffer();
 }
 
-function openAttachmentTarget(link, url) {
-  if (link.target === "_blank") {
-    window.open(url, "_blank", "noopener");
-    return;
-  }
-
-  window.location.href = url;
-}
-
 function deriveAttachmentFilename(link) {
   const title = link.getAttribute?.("title");
   if (title && /\.wav\b/i.test(title)) {
@@ -305,10 +291,6 @@ function deriveAttachmentFilename(link) {
   return "attachment.wav";
 }
 
-async function reopenUpgradedAttachmentLink(link) {
-  await reopenUpgradedAttachmentTarget(link);
-}
-
 async function reopenUpgradedAttachmentTarget(target) {
   if (pendingAttachmentTranscodes.has(target)) {
     return;
@@ -318,14 +300,7 @@ async function reopenUpgradedAttachmentTarget(target) {
     await openInlinePlayerForTarget(target);
   } catch (error) {
     console.warn("MS GSM WAV Support failed to reopen inline player", error);
-    if (target instanceof HTMLAnchorElement) {
-      openAttachmentTarget(target, target.dataset.msGsmOriginalHref || target.href);
-    }
   }
-}
-
-async function openInlinePlayerForLink(link) {
-  await openInlinePlayerForTarget(link);
 }
 
 async function openInlinePlayerForTarget(target) {
@@ -694,16 +669,11 @@ function shouldHandleGoogleMediaUrl(url) {
 
     return (
       parsed.hostname === "mail.google.com" ||
-      parsed.hostname === "drive.google.com" ||
       parsed.hostname.endsWith(".googleusercontent.com")
     ) && (
       path.includes("/mail/") ||
-      path.includes("/uc") ||
-      path.includes("/open") ||
-      path.includes("/download") ||
       query.includes("attid=") ||
       query.includes("view=att") ||
-      query.includes("mime=audio") ||
       query.includes("disp=safe") ||
       parsed.searchParams.get("view") === "att"
     );
@@ -947,10 +917,6 @@ function findHexTokenInValue(value, seen = new WeakSet()) {
   }
 
   return null;
-}
-
-function isUpgradedAttachmentLink(link) {
-  return isUpgradedAttachmentTarget(link);
 }
 
 function isUpgradedAttachmentTarget(target) {

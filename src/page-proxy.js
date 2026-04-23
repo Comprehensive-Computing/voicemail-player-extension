@@ -296,7 +296,6 @@
 
   function isGoogleAttachmentHost(hostname) {
     return hostname === "mail.google.com" ||
-      hostname === "drive.google.com" ||
       hostname.endsWith(".googleusercontent.com") ||
       hostname.endsWith(".google.com");
   }
@@ -306,14 +305,10 @@
     const path = parsed.pathname.toLowerCase();
     const full = `${path}?${parsed.searchParams.toString()}`.toLowerCase();
 
-    return path.includes("/uc") ||
-      path.includes("/attachment") ||
-      path.includes("/download") ||
-      path.includes("/open") ||
+    return path.includes("/attachment") ||
       full.includes("attid=") ||
       full.includes("view=att") ||
-      full.includes("export=download") ||
-      full.includes("mime=audio");
+      full.includes("disp=safe");
   }
 
   function findHeaderValue(headers, key) {

@@ -1,17 +1,12 @@
 {
   "name": "ms-gsm-wav-support",
   "version": "1.0.0",
-  "description": "This extension targets Gmail and Google Drive specifically. It intercepts Google-hosted audio attachment and preview requests, sniffs the returned bytes for RIFF/WAV data, decodes `WAVE_FORMAT_GSM610` (`0x0031`) to PCM WAV, and feeds the page a browser-playable result before the native media stack rejects the file.",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "description": "Gmail extension that transcodes MS GSM 6.10 WAV voicemail attachments into playable PCM WAV audio.",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
-    "@ffmpeg/ffmpeg": "^0.12.15",
-    "@ffmpeg/util": "^0.12.2"
+    "@ffmpeg/ffmpeg": "^0.12.15"
   }
 }

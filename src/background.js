@@ -1,12 +1,11 @@
 import { extensionApi } from "./browser-api.js";
+import { normalizeIncomingBuffer, transcodeWavToPcm as transcodeWavToPcmShared } from "./shared/ffmpeg-transcode.js";
 import { isProbablyWav, parseWav } from "./shared/wav.js";
-import { FFmpeg } from "./vendor/ffmpeg/index.js";
 
 const decodeCache = new Map();
 const pendingDecodeCache = new Map();
 const PLAYABLE_STORAGE_PREFIX = "playable:";
 const PLAYABLE_CACHE_TTL_MS = 30 * 60 * 1000;
-let ffmpegInstancePromise = null;
 let offscreenCreationPromise = null;
 
 void pruneExpiredPlayableEntries();
@@ -225,22 +224,6 @@ function getAudioFetchReferrer(url) {
   return null;
 }
 
-function normalizeIncomingBuffer(buffer) {
-  if (buffer instanceof ArrayBuffer) {
-    return buffer;
-  }
-
-  if (ArrayBuffer.isView(buffer)) {
-    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-  }
-
-  if (Array.isArray(buffer)) {
-    return Uint8Array.from(buffer).buffer;
-  }
-
-  throw new Error("Invalid audio buffer payload.");
-}
-
 async function processAudioBuffer(arrayBuffer) {
   if (!isProbablyWav(arrayBuffer)) {
     return {
@@ -270,28 +253,7 @@ async function transcodeWavToPcm(arrayBuffer) {
     return transcodeWithOffscreen(arrayBuffer);
   }
 
-  const ffmpeg = await getFfmpeg();
-  const inputName = `input-${crypto.randomUUID()}.wav`;
-  const outputName = `output-${crypto.randomUUID()}.wav`;
-
-  try {
-    await ffmpeg.writeFile(inputName, new Uint8Array(arrayBuffer));
-    await ffmpeg.exec([
-      "-i", inputName,
-      "-c:a", "pcm_s16le",
-      outputName
-    ]);
-
-    const data = await ffmpeg.readFile(outputName);
-    if (!(data instanceof Uint8Array)) {
-      throw new Error("ffmpeg returned unexpected output data.");
-    }
-
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  } finally {
-    await safeDeleteFile(ffmpeg, inputName);
-    await safeDeleteFile(ffmpeg, outputName);
-  }
+  return transcodeWavToPcmShared(arrayBuffer);
 }
 
 async function transcodeWithOffscreen(arrayBuffer) {
@@ -316,26 +278,6 @@ async function transcodeWithOffscreen(arrayBuffer) {
       resolve(Uint8Array.from(response.buffer).buffer);
     });
   });
-}
-
-async function getFfmpeg() {
-  if (!ffmpegInstancePromise) {
-    ffmpegInstancePromise = loadFfmpeg();
-  }
-
-  return ffmpegInstancePromise;
-}
-
-async function loadFfmpeg() {
-  const ffmpeg = new FFmpeg();
-
-  await ffmpeg.load({
-    classWorkerURL: extensionApi.runtime.getURL("src/vendor/ffmpeg/worker.js"),
-    coreURL: extensionApi.runtime.getURL("src/vendor/ffmpeg-core/ffmpeg-core.js"),
-    wasmURL: extensionApi.runtime.getURL("src/vendor/ffmpeg-core/ffmpeg-core.wasm")
-  });
-
-  return ffmpeg;
 }
 
 async function ensureOffscreenDocument() {
@@ -367,14 +309,6 @@ async function ensureOffscreenDocument() {
     await offscreenCreationPromise;
   } finally {
     offscreenCreationPromise = null;
-  }
-}
-
-async function safeDeleteFile(ffmpeg, path) {
-  try {
-    await ffmpeg.deleteFile(path);
-  } catch {
-    // Ignore cleanup failures.
   }
 }
 

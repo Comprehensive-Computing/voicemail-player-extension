@@ -9,12 +9,12 @@
     "128": "img/Voicemail-Player-Extension-Icon-128x128.png"
   },
   "permissions": [
-    "scripting",
     "storage",
     "offscreen"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://mail.google.com/*",
+    "https://*.googleusercontent.com/*"
   ],
   "background": {
     "service_worker": "src/background.js",

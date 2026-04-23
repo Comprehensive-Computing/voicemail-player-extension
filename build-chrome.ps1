@@ -28,6 +28,7 @@ Copy-Item -LiteralPath (Join-Path $root "src\\content-script.js") -Destination (
 Copy-Item -LiteralPath (Join-Path $root "src\\offscreen.html") -Destination (Join-Path $target "src\\offscreen.html")
 Copy-Item -LiteralPath (Join-Path $root "src\\offscreen.js") -Destination (Join-Path $target "src\\offscreen.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\page-proxy.js") -Destination (Join-Path $target "src\\page-proxy.js")
+Copy-Item -LiteralPath (Join-Path $root "src\\shared\\ffmpeg-transcode.js") -Destination (Join-Path $target "src\\shared\\ffmpeg-transcode.js")
 Copy-Item -LiteralPath (Join-Path $root "src\\shared\\wav.js") -Destination (Join-Path $target "src\\shared\\wav.js")
 Copy-Item -LiteralPath (Join-Path $root "node_modules\\@ffmpeg\\ffmpeg\\dist\\esm\\classes.js") -Destination (Join-Path $target "src\\vendor\\ffmpeg\\classes.js")
 Copy-Item -LiteralPath (Join-Path $root "node_modules\\@ffmpeg\\ffmpeg\\dist\\esm\\const.js") -Destination (Join-Path $target "src\\vendor\\ffmpeg\\const.js")
