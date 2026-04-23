@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $distRoot = Join-Path $root "dist"
 $target = Join-Path $distRoot "firefox"
-$archive = Join-Path $distRoot "firefox.zip"
+$archive = Join-Path $distRoot "firefox.xpi"
 
 if (Test-Path $target) {
   Remove-Item -LiteralPath $target -Recurse -Force

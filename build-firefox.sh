@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dist_root="$root/dist"
 target="$dist_root/firefox"
-archive="$dist_root/firefox.zip"
+archive="$dist_root/firefox.xpi"
 
 rm -rf "$target"
 rm -f "$archive"
