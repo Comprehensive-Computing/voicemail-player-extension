@@ -11,10 +11,6 @@
   "permissions": [
     "storage"
   ],
-  "host_permissions": [
-    "https://mail.google.com/*",
-    "https://*.googleusercontent.com/*"
-  ],
   "background": {
     "scripts": [
       "src/background.js"
