@@ -12,10 +12,6 @@
     "storage",
     "offscreen"
   ],
-  "host_permissions": [
-    "https://mail.google.com/*",
-    "https://*.googleusercontent.com/*"
-  ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
