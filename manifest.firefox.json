@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Voicemail Player",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Transcodes MS GSM 6.10 WAV Gmail attachments into playable PCM WAV audio.",
   "icons": {
     "32": "img/Voicemail-Player-Extension-Icon-32x32.png",
